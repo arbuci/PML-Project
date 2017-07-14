@@ -1,0 +1,107 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Ian Arbuckle"
+date: "July 13, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = TRUE)
+library("caret")
+library("e1071")
+library("gbm")
+```
+
+## Introduction and Dataset
+
+I will be using data from accelerometers in study participants to try and build a model to accurately classify how well a barbell lift is being performed. A training data set will be used to construct the model, and a separate test set will be used for validation and accuracy checking.
+
+To remove some aparent Excel-era divide-by-zero factors, the "#DIV/0!" message will be imported as **NA**.
+
+```{r}
+train <- read.csv("H:/R-Projects/8_project/pml-training.csv",
+                  na.strings=c("NA","#DIV/0!",""))
+test <- read.csv("H:/R-Projects/8_project/pml-testing.csv", 
+                 na.strings=c("NA","#DIV/0!",""))
+```
+
+The first thing to note in the training set is the existence of an row number variable and a test subject name field. Neither of these will be useful as predictors. There are also three variables indicating time and date. These could potentially be relevant in a time-series analysis, but the accelerometer data are what I'm building the model around. The variables "new_window" and "num_window" also appear to be demographic/bookkeeping.
+
+I'll eliminate these variables to focus on the remaining classifiers and numeric predictors, coercing those variables to numeric. 
+
+```{r}
+train <- train[, 8:160]
+test <- test[, 8:160]
+
+for (i in 1:152) {
+  train[, i] <- as.numeric(train[, i])
+  test[, i] <- as.numeric(test[, i])
+}
+```
+
+## Pre-Processing Steps
+
+With a large number of numeric predictors, I want to examine them for near-zero variance. The goal is to identify the predictors with minimal variance, and where the ratio between the most common and second most common value is very low.
+
+```{r}
+nzv <- nearZeroVar(train, saveMetrics = TRUE)
+head(nzv[which(nzv$nzv == TRUE), ])
+dim(nzv[which(nzv$nzv == TRUE), ])
+```
+
+35 of the 152 variables have zero or near-zero variance. In this instance, with the presence of an equal number of high-variance variables, I will remove the zero and near-zero variance predictors. 
+
+```{r}
+train <- train[, nzv$nzv == FALSE]
+```
+
+There are also a lot of variables that are **NA** for a majority of the observations in the training set. For ease of fitting a model, I will remove these as well if at least 90% of the observations have NA.
+
+```{r}
+clean <- train
+for(i in 1:length(train)) {
+    if( sum( is.na( train[, i] ) ) /nrow(train) >= .9) {
+        for(j in 1:length(clean)) {
+            if( length( grep(names(train[i]), names(clean)[j]) ) == 1) {
+                clean <- clean[ , -j]
+            }   
+        } 
+    }
+}
+train <- clean
+```
+
+And update the test set to contain only the same variables. 
+
+```{r}
+goodCols <- colnames(train)
+goodCols <- goodCols[-53] #Removing the classifier variable
+test <- test[, goodCols]
+```
+
+The result is a training data set with 52 predictors and the classifier, with the test set containing only the 52 predictors.
+
+---
+
+## Model Selection
+
+Since this is a classification problem with a large number of correlated variables, a model using classification trees seems appropriate. Given the variety and inter-categorical correlations, a boosted tree method seems appropriate. 
+
+```{r}
+ctrl <- trainControl(method = "repeatedcv", repeats = 1, number = 3)
+fit <- train(classe ~ .,
+             data = train, 
+             method = "gbm", 
+             verbose = FALSE, 
+             trControl = ctrl)
+fit
+```
+
+96% accuracy at 3 layers of interaction depth and 150 trees is the final model, and a reasonable success rate.
+
+```{r}
+plot(fit)
+```
+
+This shows an interesting decline in the slope of accuracy improvement over 100 trees, but crossing the 95% threshold around 150 trees. Given the accuracy percentage, I can suppose a lower boundary on the out-of-sample error of ~3.87%. 
